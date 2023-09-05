@@ -1,0 +1,281 @@
+---
+title: "Dallas County Crime Data"
+author: "Ateeb Bin Muzaffar"
+date: "2023-05-26"
+output: html_document
+---
+
+```{r, include=FALSE}
+library(Rcpp)
+library(ggmap)
+library(tidyverse)
+library(rgdal)
+library(sp)
+library(remotes)
+library(devtools)
+library(leaflet)
+library(ggcorrplot)
+library(gridExtra)
+library(forecast)
+library(lubridate)
+library(xts)
+library(magrittr)
+library(GGally)
+library(ggplot2)
+library(readr)
+library(sf)
+library(dplyr)
+library(corrplot)
+library(ggcorrplot)
+library(psych)
+library(plotly)
+
+df <- read.csv("./37-00049_UOF-P_2016_prepped.csv")
+##===================Preprocessing=================
+#Dropping row 1 as it only elaborates the column names
+df <- df[-(1),]
+
+#Check for NULL values in the Subject Race Columns
+sum(df$SUBJECT_RACE == "NULL")
+
+#Extract unique non-NULL values from the column
+unique_values <- unique(df$SUBJECT_RACE[!df$SUBJECT_RACE %in% "NULL"])
+
+#Replace NULL values with a random value from the same column
+df$SUBJECT_RACE <- ifelse(df$SUBJECT_RACE == "NULL", sample(unique_values, size = 1), df$SUBJECT_RACE)
+
+#Convert Date Column to Date format
+df$INCIDENT_DATE <- as.Date(df$INCIDENT_DATE, format = "%m/%d/%y")
+
+#Check for NULL values in the INCIDENT_REASON column
+sum(df$INCIDENT_REASON == "NULL")
+
+#Extract unique non-NULL values from the column
+incident_unique <- unique(df$INCIDENT_REASON[!df$INCIDENT_REASON %in% "NULL"])
+
+#Replace NULL values with a random value from the same column
+df$INCIDENT_REASON <- ifelse(df$INCIDENT_REASON == "NULL", sample(unique_values, size = 1), df$INCIDENT_REASON)
+
+#Convert Officer Years on Force to Numeric
+df$OFFICER_YEARS_ON_FORCE <- as.numeric(df$OFFICER_YEARS_ON_FORCE)
+
+
+```
+
+
+
+## Introduction
+
+The data set for this project contains information about police data for Dallas County, Texas regarding crime incidents. The dataset aims to provide a better understanding of police practices and identify potential areas of improvement in the relationship between the police and the communities they serve. In this report, we will explore various data visualization techniques to gain insights into the patterns and trends in policing practices. The dataset consists of information on 2383 incidents.
+
+The dataset can be used to explore trends in policing practices. For example, data visualization techniques can be used to identify biases among officers towards people of color and potentially uncover any underlying patterns.
+
+## Including Plots
+
+### Table
+we can see the number of individuals or subjects, and officers involved in the incidents, broken down by race. This can identify disparities in arrests based on race.
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+tab1 <- sort(table(df$SUBJECT_RACE), decreasing = TRUE)
+knitr::kable(tab1, caption = "Incident Involvements by Subject Race", col.names = c("Race", "Frequency"))
+
+tab2 <- sort(table(df$OFFICER_RACE), decreasing = TRUE)
+knitr::kable(tab2, caption = "Incident Involvements by Officer Race", col.names = c("Race", "Frequency"))
+
+```
+From the above information it is evident that the number of African Americans and 'White' officers have the highest number of involvements in reported incidents. This does not look like a mere coincidence and this shows a glimpse of racial disparity in police/community interactions.
+
+## Arrests By Race
+We can see the number and proportion of arrests with respect to total involvements, by race using the following visualization:
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+#Select columns using the 'SUBJECT_WAS_ARRESTED' and 'SUBJECT_RACE' features
+int_bar <- df %>% select(SUBJECT_WAS_ARRESTED, SUBJECT_RACE)
+
+#Filter for cases where the subject was arrested
+int_bar <- int_bar %>% filter(SUBJECT_WAS_ARRESTED == "Yes")
+
+ggplotly(ggplot(df, aes(x = SUBJECT_RACE, fill = SUBJECT_WAS_ARRESTED)) +
+  geom_bar(stat = "count") +
+  labs(x = "Subject race", y = "Arrested count", fill= "Arrested"))
+
+
+
+```
+
+## Reasons for Occurance
+Arrests and 911 services calls amounted to a significant 76.8% of the reasons for each incidents.
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+#Piechart
+plot_ly(df, labels = ~INCIDENT_REASON, type = 'pie', 
+        textposition = 'inside',
+        textinfo = 'percent+label') %>%
+  layout(xaxis = list())
+
+```
+
+
+From the following charts it can be seen that the number of incidences were highest in the first quarter and gradually reduced over the course of the year:
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+
+#Make a new column 'Month' and assign all the dates as their respective Months
+df$Month <- months(df$INCIDENT_DATE)
+df$Month <- ordered(df$Month, levels= c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"))
+
+#Select columns using the 'SUBJECT_WAS_ARRESTED' and 'Month' features
+df_cols <- df %>% select(SUBJECT_WAS_ARRESTED, Month)
+
+#Filter for cases where the subject was arrested
+df_arrested <- df_cols %>% filter(SUBJECT_WAS_ARRESTED == "Yes")
+
+#Plotting number of arrests for each month
+ggplotly(ggplot(df_cols, aes(x = Month, fill=SUBJECT_WAS_ARRESTED )) + 
+  geom_bar(stat = "count") + labs(x = "Month", y = "Number of Arrests", 
+      title = "Month-wise Arrests", fill="Arrested"))
+
+
+# Group by (weekly) INCIDENT_DATE and SUBJECT_WAS_ARRESTED
+ts_arrested <- df %>% 
+  group_by(week = week(INCIDENT_DATE), SUBJECT_WAS_ARRESTED) %>% 
+  summarise(count = n())
+
+# Create a weekly time series plot of whether the Subjects were arrested (with smoothing)
+ggplot(ts_arrested, aes(x = week, y = count, color = as.factor(SUBJECT_WAS_ARRESTED))) +
+  geom_line() +
+  geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.2) +
+  scale_x_continuous(breaks = seq(0, max(ts_arrested$week), by = 5)) +
+  labs(title = "Arrests By Week", x = "Week", y = "Number of Arrests", color = "Arrested or Not")
+
+```
+
+It is evident that 'White' american officers were involved in most of the cases as well as the highest number of arrests.
+
+Also, less experienced officers with 0-10 years of experience were the most involved and made the most amount of arrests.
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+#Arrests by Race
+ggplotly(ggplot(df, aes(x = OFFICER_RACE, fill = SUBJECT_WAS_ARRESTED)) +
+  geom_histogram(stat="count") +
+  labs(title = "Arrests made by Officer Race", x = "Officer Race", y = "Count", fill = "Arrested") +
+  theme(plot.title = element_text(size = 12, face = "bold")))
+
+
+#Convert Officer Years on Force to numeric
+
+##Arrests by Officer Experience
+ggplotly(ggplot(df, aes(x = OFFICER_YEARS_ON_FORCE, fill = SUBJECT_WAS_ARRESTED)) +
+  geom_histogram(binwidth=5) +
+  scale_x_continuous(breaks = seq(0, 40, by = 5)) +
+  labs(title = "Arrests made by Officer Experience", x = "Officer Experience", y = "Count", fill = "Arrested") +
+  theme(plot.title = element_text(size = 12, face = "bold")))
+
+```
+A majority of the incidents occured in districts 2 and 14. This could mean that as people of color, especially African americans, were involved in a majority of the incidents (albeit unfairly or fairly) their communities may be established mostly in these districts.
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+#Arrests by District
+ggplotly(ggplot(df, aes(x = as.factor(LOCATION_DISTRICT), fill = SUBJECT_WAS_ARRESTED)) +
+           geom_histogram(stat="count") +
+           labs(title = "Arrests made by District", x = "District Number", y = "Count", fill = "Arrested") +
+           theme(plot.title = element_text(size = 12, face = "bold")))
+```
+
+
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+#Density Plot of Arrests by Officer Years on Force
+ggplotly(ggplot(data = df, aes(x = OFFICER_YEARS_ON_FORCE, fill= SUBJECT_WAS_ARRESTED)) +
+           geom_density() +
+           labs(title = "Density Plot of Arrests by Officer Years on Force", 
+                x = "Officer Years on Force", y = "Density", fill = "Arrested"))
+```
+We can see from the following charts that a majority of the officers with a 'White' ethnicity had an experience of less than 10 years. This confirms our previous assessment that young white officers were were involved in the highest number of cases.
+
+Among the genders, there was not a huge disparity among officers. With Males still being higher in number.
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+
+#Distribution of Officer Experience by Race
+ggplotly(ggplot(df, aes(x = OFFICER_RACE , y = OFFICER_YEARS_ON_FORCE, fill=OFFICER_RACE)) +
+           geom_violin() +
+           labs(title = "Distribution of Officer Experience by Race",
+                x = "Officer Race", y = "Officer Experience"))
+
+#Officer Years on force by gender
+plot_ly(data=df, x = df$OFFICER_GENDER, y = df$OFFICER_YEARS_ON_FORCE, type = "box",
+        color = df$OFFICER_GENDER, colors = c("#ff6f0e", "#1f57b4"),
+        hoverinfo = "y+text") %>%
+  layout(title = "Officer Gender vs. Years on Force",
+         xaxis = list(title = "Gender"),
+         yaxis = list(title = "Years on Force"))
+
+```
+# Locations
+Below is a plot of locations where more than 5 incidents occured, these were concentrated in downtown Dallas.
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+#Loading crime data
+offences <- read_csv("./37-00049_UOF-P_2016_prepped.csv", skip = 1)
+
+#counting crimes
+crimes <- offences %>% group_by(Longitude,Latitude) %>% 
+  count() %>% arrange(desc(n)) %>% drop_na()
+
+#renaming long column names
+names(crimes) <- c('x','y','n')
+
+#considering only instances of crimes more than 5
+crimes_gt_5 <- crimes[crimes$n>5,]
+
+
+#Read Shapefile
+df.shp <- readOGR(dsn = "37-00049_Shapefiles/EPIC.shp")
+
+#Convert shapefile to dataframe to work with ggplot
+df.shp<-fortify(df.shp)
+
+#Plot the data
+shpMap <- ggplot(data = df.shp, aes(long,lat)) +
+  geom_polygon(aes(group=group), fill="lightblue") +
+  coord_equal() +
+  labs(x = "Longitude (Degrees)",
+       y = "Latitude (Degrees)",
+       title = "Map ",
+       subtitle = "Map - Based on the Lat Long in Shape Files")
+
+shpMap
+
+
+#Making a map from OpenStreetMaps/Stamen
+
+#defining a boundary box with an offset value of 0.01 to incorporate the minimum
+#and maximum longitudes and latitudes
+offset <- 0.01
+bbox <- c(left=min(crimes_gt_5$x -offset),bottom=min(crimes_gt_5$y) -offset,
+          right=max(crimes_gt_5$x +offset),top=max(crimes_gt_5$y) +offset)
+map <- get_stamenmap(bbox, zoom = 12)
+
+#Overlaying the Crime Data
+mapv=ggmap(map)+ 
+  geom_point(aes(x= x, y= y, size= n, alpha=1, color= "salmon"), 
+             data = crimes_gt_5) +  
+  labs(title = "Crime Occurences") + 
+  theme(legend.position="none")
+
+mapv
+
+#Using Leaflet
+names(crimes_gt_5) <-c("longitude","latitude","n")
+maplf <- crimes_gt_5 %>% leaflet() %>% 
+  addTiles() %>%   
+  setView(-96.8,32.8,zoom = 11) %>% 
+  addCircleMarkers(popup = ~n)
+
+maplf
+
+```
+
+## Conclusion
+
+From our analysis it was seen that 'White' Officers with less than 10 years of experience i.e. relatively young were involved in the highest number of incidents and made the most amount of arrests. From this it is evident that there is a crucial need to educate these police personnel as this falls under a breach of rights for the already marginalized 'African' community. There is prejudice among these officers and they need to be trained about the ethics that they need to be aware of considering they are in a position of power. 
+
+This can help reduce racial disparities in policing practices. For example, policymakers can use the dataset to identify areas or districts with the highest rates of incidents, in this case 'District 2' and 'District 12' and implement targeted interventions to address these disparities.
